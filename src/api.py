@@ -109,6 +109,9 @@ class EyeCoordinate(BaseModel):
     x: Optional[float] = Field(None, description="X pixel coordinate")
     y: Optional[float] = Field(None, description="Y pixel coordinate")
     conf: Optional[float] = Field(None, description="Keypoint confidence score")
+    inside_mask: Optional[bool] = Field(
+        None, description="Whether the predicted keypoint lies inside its instance mask"
+    )
 
 
 class AnimalMeasurement(BaseModel):
@@ -117,11 +120,31 @@ class AnimalMeasurement(BaseModel):
     bbox: List[float] = Field(..., description="[x1, y1, x2, y2] bounding box")
     bbox_confidence: float
     mask_polygon: Optional[List[List[float]]] = None
-    left_eye: Optional[EyeCoordinate] = None
-    right_eye: Optional[EyeCoordinate] = None
+    pose_candidate_left_eye: Optional[EyeCoordinate] = Field(
+        None, description="Raw pose candidate; may lie outside the instance mask"
+    )
+    pose_candidate_right_eye: Optional[EyeCoordinate] = Field(
+        None, description="Raw pose candidate; may lie outside the instance mask"
+    )
+    pose_candidate_interocular_dist_px: Optional[float] = Field(
+        None, description="Unverified distance between raw pose candidates in pixels"
+    )
+    pose_candidate_interocular_dist_mm: Optional[float] = Field(
+        None, description="Unverified distance between raw pose candidates in millimeters"
+    )
+    left_eye: Optional[EyeCoordinate] = Field(
+        None, description="Pose estimate that passed confidence and instance-mask checks"
+    )
+    right_eye: Optional[EyeCoordinate] = Field(
+        None, description="Pose estimate that passed confidence and instance-mask checks"
+    )
     mask_area_px: float = Field(..., description="Segmented animal mask area in pixels")
-    interocular_dist_px: Optional[float] = Field(None, description="Task 3: Dual-eye distance in pixels")
-    interocular_dist_mm: Optional[float] = Field(None, description="Task 3: Dual-eye distance in millimeters")
+    interocular_dist_px: Optional[float] = Field(
+        None, description="Task 3: Distance from mask-checked pose estimates in pixels"
+    )
+    interocular_dist_mm: Optional[float] = Field(
+        None, description="Task 3: Distance from mask-checked pose estimates in millimeters"
+    )
 
 
 class PairwiseMeasurement(BaseModel):
@@ -132,8 +155,24 @@ class PairwiseMeasurement(BaseModel):
     animal_1_right_eye: str
     animal_1_interocular_dist_mm: Optional[float]
     animal_2_interocular_dist_mm: Optional[float]
-    right_eye_to_right_eye_dist_px: Optional[float] = Field(None, description="Task 4: Cross-individual right eye dist in pixels")
-    right_eye_to_right_eye_dist_mm: Optional[float] = Field(None, description="Task 4: Cross-individual right eye dist in mm")
+    right_eye_to_right_eye_dist_px: Optional[float] = Field(
+        None, description="Task 4: Distance between mask-checked pose estimates in pixels"
+    )
+    right_eye_to_right_eye_dist_mm: Optional[float] = Field(
+        None, description="Task 4: Distance between mask-checked pose estimates in mm"
+    )
+    pose_candidate_animal_1_right_eye: Optional[EyeCoordinate] = Field(
+        None, description="Unverified raw right-eye candidate for animal 1"
+    )
+    pose_candidate_animal_2_right_eye: Optional[EyeCoordinate] = Field(
+        None, description="Unverified raw right-eye candidate for animal 2"
+    )
+    pose_candidate_right_eye_to_right_eye_dist_px: Optional[float] = Field(
+        None, description="Unverified raw right-eye distance in pixels"
+    )
+    pose_candidate_right_eye_to_right_eye_dist_mm: Optional[float] = Field(
+        None, description="Unverified raw right-eye distance in millimeters"
+    )
 
 
 class PredictResponse(BaseModel):

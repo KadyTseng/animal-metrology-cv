@@ -4,8 +4,8 @@ Animal Metrology Pipeline
 Two-Stage Computer Vision Metrology Pipeline:
 1. Stage 1 (Segmentation): Utilize YOLOv8-seg (Instance Segmentation) to extract
    individual animal contours, bounding boxes, and binary mask polygons.
-2. Stage 2 (Eye Localization & Metrology): Localize left and right eyes strictly
-   within each segmented animal mask, calculating morphological distances.
+2. Stage 2 (Eye Localization & Metrology): Run eye-pose inference independently
+   on each masked animal crop, then validate keypoints against its segmentation mask.
 
 Tasks:
 - Task 3: Single-animal interocular distance (pixel to physical mm).
@@ -60,7 +60,6 @@ class AnimalMetrologyPipeline:
         pixel_to_mm_scale: Optional[float] = None,
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
-        pose_animal_conf_threshold: Optional[float] = None,
         pose_keypoint_conf_threshold: Optional[float] = None,
         pose_crop_margin: Optional[float] = None,
         device: Optional[Union[str, int]] = None,
@@ -72,7 +71,7 @@ class AnimalMetrologyPipeline:
         :param pose_model_weights: Custom two-keypoint YOLOv8 Pose weights.
         :param pixel_to_mm_scale: Physical conversion ratio (mm/pixel, default: 0.15).
         :param pose_keypoint_conf_threshold: Minimum confidence for an eye keypoint.
-        :param pose_crop_margin: Fraction of the animal box added around the pose crop.
+        :param pose_crop_margin: Fraction of the mask bounds added around the pose crop.
         """
         self.seg_model_weights = (
             seg_model_weights
@@ -93,11 +92,6 @@ class AnimalMetrologyPipeline:
         )
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
-        self.pose_animal_conf_threshold = float(
-            pose_animal_conf_threshold
-            if pose_animal_conf_threshold is not None
-            else os.getenv("POSE_ANIMAL_CONF_THRESHOLD", "0.4")
-        )
         self.pose_keypoint_conf_threshold = float(
             pose_keypoint_conf_threshold
             if pose_keypoint_conf_threshold is not None
@@ -106,7 +100,7 @@ class AnimalMetrologyPipeline:
         self.pose_crop_margin = float(
             pose_crop_margin
             if pose_crop_margin is not None
-            else os.getenv("POSE_CROP_MARGIN", "0.2")
+            else os.getenv("POSE_CROP_MARGIN", "0.08")
         )
         self.device = device if device is not None else os.getenv("DEVICE") or None
 
@@ -206,34 +200,18 @@ class AnimalMetrologyPipeline:
             raise ValueError(f"OpenCV could not read image at: {path}")
         return img
 
-    def _detect_eyes_within_mask(
+    def _predict_eyes_in_segmented_roi(
         self,
         image: np.ndarray,
-        bbox: List[float],
         polygon: Optional[List[List[float]]],
-        class_name: str,
-        animal_confidence: float = 1.0,
-    ) -> Tuple[Optional[Dict[str, float]], Optional[Dict[str, float]]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
-        Detect the two eye keypoints in an expanded animal crop and keep only points
-        that fall inside that animal's segmentation mask.
+        Run pose inference on one instance crop with pixels outside its mask filled.
+        Return raw candidates and annotate whether each point lies inside the mask.
         """
         image_h, image_w = image.shape[:2]
-        if class_name.lower() not in {"cat", "dog"}:
-            return None, None
-        if animal_confidence < self.pose_animal_conf_threshold:
-            return None, None
         if self.pose_model is None:
             raise RuntimeError("The trained cat/dog eye pose model is not loaded.")
-
-        x1 = max(0, min(image_w, int(math.floor(float(bbox[0])))))
-        y1 = max(0, min(image_h, int(math.floor(float(bbox[1])))))
-        x2 = max(0, min(image_w, int(math.ceil(float(bbox[2])))))
-        y2 = max(0, min(image_h, int(math.ceil(float(bbox[3])))))
-
-        if x2 <= x1 or y2 <= y1:
-            logger.warning("Skipping eye localization for an invalid animal bounding box.")
-            return None, None
         if polygon is None:
             logger.warning("Skipping eye localization because the instance mask is unavailable.")
             return None, None
@@ -246,31 +224,35 @@ class AnimalMetrologyPipeline:
         instance_mask = np.zeros((image_h, image_w), dtype=np.uint8)
         polygon_points = np.rint(polygon_array[:, :2]).astype(np.int32)
         cv2.fillPoly(instance_mask, [polygon_points], 255)
-        if cv2.countNonZero(instance_mask[y1:y2, x1:x2]) == 0:
-            logger.warning("Skipping eye localization because the mask does not overlap its animal box.")
+        ys, xs = np.where(instance_mask > 0)
+        if len(xs) == 0:
+            logger.warning("Skipping eye localization because the instance mask is empty.")
             return None, None
 
-        box_width = x2 - x1
-        box_height = y2 - y1
-        crop_x1 = max(0, int(math.floor(x1 - box_width * self.pose_crop_margin)))
-        crop_y1 = max(0, int(math.floor(y1 - box_height * self.pose_crop_margin)))
-        crop_x2 = min(image_w, int(math.ceil(x2 + box_width * self.pose_crop_margin)))
-        crop_y2 = min(image_h, int(math.ceil(y2 + box_height * self.pose_crop_margin)))
-        crop = image[crop_y1:crop_y2, crop_x1:crop_x2]
+        mask_x1, mask_x2 = int(xs.min()), int(xs.max()) + 1
+        mask_y1, mask_y2 = int(ys.min()), int(ys.max()) + 1
+        margin_x = max(4, int((mask_x2 - mask_x1) * self.pose_crop_margin))
+        margin_y = max(4, int((mask_y2 - mask_y1) * self.pose_crop_margin))
+        crop_x1 = max(0, mask_x1 - margin_x)
+        crop_y1 = max(0, mask_y1 - margin_y)
+        crop_x2 = min(image_w, mask_x2 + margin_x)
+        crop_y2 = min(image_h, mask_y2 + margin_y)
+        crop = image[crop_y1:crop_y2, crop_x1:crop_x2].copy()
         if crop.size == 0:
-            logger.warning("Skipping eye localization because the expanded animal crop is empty.")
+            logger.warning("Skipping eye localization because the masked animal crop is empty.")
             return None, None
 
-        def is_inside_instance(x: float, y: float) -> bool:
-            px, py = int(round(x)), int(round(y))
-            return (
-                x1 <= px < x2
-                and y1 <= py < y2
-                and instance_mask[py, px] > 0
-            )
+        crop_mask = instance_mask[crop_y1:crop_y2, crop_x1:crop_x2] > 0
+        if not np.any(crop_mask):
+            logger.warning("Skipping eye localization because the crop does not contain its mask.")
+            return None, None
+        fill_color = np.median(crop[crop_mask], axis=0).astype(np.uint8)
+        masked_crop = np.empty_like(crop)
+        masked_crop[:] = fill_color
+        masked_crop[crop_mask] = crop[crop_mask]
 
         pose_result = self.pose_model.predict(
-            source=crop,
+            source=masked_crop,
             conf=self.conf_threshold,
             device=self.device,
             verbose=False,
@@ -280,43 +262,40 @@ class AnimalMetrologyPipeline:
         if pose_boxes is None or pose_keypoints is None or len(pose_boxes) == 0:
             return None, None
 
-        predicted_boxes = pose_boxes.xyxy.cpu().numpy()
-        predicted_classes = pose_boxes.cls.cpu().numpy().astype(int)
+        box_confidences = pose_boxes.conf.cpu().numpy()
         keypoints = pose_keypoints.data.cpu().numpy()
-        names = pose_result.names
-
-        best_index = None
-        best_iou = 0.0
-        for index, (pose_box, class_id) in enumerate(zip(predicted_boxes, predicted_classes)):
-            predicted_class_name = str(names[int(class_id)]).lower()
-            if predicted_class_name != class_name.lower():
-                continue
-
-            full_image_box = [
-                float(pose_box[0] + crop_x1),
-                float(pose_box[1] + crop_y1),
-                float(pose_box[2] + crop_x1),
-                float(pose_box[3] + crop_y1),
-            ]
-            overlap = self.calculate_box_iou(bbox, full_image_box)
-            if overlap > best_iou:
-                best_index = index
-                best_iou = overlap
-
-        if best_index is None or best_iou < 0.1 or len(keypoints[best_index]) < 2:
+        if len(box_confidences) != len(keypoints):
+            logger.warning("Skipping eye localization because pose boxes and keypoints do not align.")
+            return None, None
+        best_index = int(np.argmax(box_confidences))
+        if len(keypoints[best_index]) < 2:
             return None, None
 
-        def make_eye(keypoint: np.ndarray) -> Optional[Dict[str, float]]:
+        def make_eye(keypoint: np.ndarray) -> Optional[Dict[str, Any]]:
             x = float(keypoint[0] + crop_x1)
             y = float(keypoint[1] + crop_y1)
             confidence = float(keypoint[2]) if len(keypoint) > 2 else 1.0
-            if confidence < self.pose_keypoint_conf_threshold or not is_inside_instance(x, y):
+            if (
+                not np.isfinite(x)
+                or not np.isfinite(y)
+                or confidence < self.pose_keypoint_conf_threshold
+                or not (0 <= x < image_w and 0 <= y < image_h)
+            ):
                 return None
-            return {"x": round(x, 2), "y": round(y, 2), "conf": round(confidence, 3)}
+            px, py = int(round(x)), int(round(y))
+            inside_mask = (
+                0 <= px < image_w
+                and 0 <= py < image_h
+                and instance_mask[py, px] > 0
+            )
+            return {
+                "x": round(x, 2),
+                "y": round(y, 2),
+                "conf": round(confidence, 3),
+                "inside_mask": bool(inside_mask),
+            }
 
-        left_eye = make_eye(keypoints[best_index][0])
-        right_eye = make_eye(keypoints[best_index][1])
-        return left_eye, right_eye
+        return make_eye(keypoints[best_index][0]), make_eye(keypoints[best_index][1])
 
     def infer(
         self,
@@ -326,9 +305,9 @@ class AnimalMetrologyPipeline:
         """
         Execute full Two-Stage inference pipeline:
         1. Stage 1: Segment individual animal contours (YOLOv8-seg) with Cross-Class NMS.
-        2. Stage 2: Localize dual-eye keypoints strictly within each segmented animal contour.
-        3. Task 3: Compute single-animal interocular distance (px & mm).
-        4. Task 4: Compute cross-individual right-eye distance (px & mm).
+        2. Stage 2: Run pose inference on each masked animal crop, regardless of
+           the segmentation class, and mark candidates outside the mask as unverified.
+        3. Compute validated and unverified candidate distances separately.
         """
         image = self.read_image(image_source)
         h, w = image.shape[:2]
@@ -396,9 +375,19 @@ class AnimalMetrologyPipeline:
                         (box[2] - box[0]) * (box[3] - box[1]) * 0.75
                     )
 
-                # Stage 2: Run the cat/dog pose model on this mask's expanded box.
-                left_eye, right_eye = self._detect_eyes_within_mask(
-                    image, box, mask_polygon, class_name, candidate["conf"]
+                # Stage 2: Run pose inference on this instance's masked crop.
+                pose_candidate_left_eye, pose_candidate_right_eye = (
+                    self._predict_eyes_in_segmented_roi(image, mask_polygon)
+                )
+                left_eye = (
+                    pose_candidate_left_eye
+                    if pose_candidate_left_eye and pose_candidate_left_eye["inside_mask"]
+                    else None
+                )
+                right_eye = (
+                    pose_candidate_right_eye
+                    if pose_candidate_right_eye and pose_candidate_right_eye["inside_mask"]
+                    else None
                 )
 
                 interocular_px = None
@@ -413,6 +402,20 @@ class AnimalMetrologyPipeline:
                     )
                     interocular_mm = self.pixel_to_mm(interocular_px)
 
+                pose_candidate_interocular_px = None
+                pose_candidate_interocular_mm = None
+                if pose_candidate_left_eye and pose_candidate_right_eye:
+                    pose_candidate_interocular_px = round(
+                        self.euclidean_distance(
+                            (pose_candidate_left_eye["x"], pose_candidate_left_eye["y"]),
+                            (pose_candidate_right_eye["x"], pose_candidate_right_eye["y"]),
+                        ),
+                        2,
+                    )
+                    pose_candidate_interocular_mm = self.pixel_to_mm(
+                        pose_candidate_interocular_px
+                    )
+
                 detected_animals.append(
                     {
                         "animal_id": f"animal_{animal_number}",
@@ -421,6 +424,10 @@ class AnimalMetrologyPipeline:
                         "bbox_confidence": round(candidate["conf"], 3),
                         "mask_polygon": mask_polygon,
                         "mask_area_px": round(mask_area_px, 2),
+                        "pose_candidate_left_eye": pose_candidate_left_eye,
+                        "pose_candidate_right_eye": pose_candidate_right_eye,
+                        "pose_candidate_interocular_dist_px": pose_candidate_interocular_px,
+                        "pose_candidate_interocular_dist_mm": pose_candidate_interocular_mm,
                         "left_eye": left_eye,
                         "right_eye": right_eye,
                         "interocular_dist_px": interocular_px,
@@ -439,6 +446,8 @@ class AnimalMetrologyPipeline:
 
                 r1 = a1.get("right_eye")
                 r2 = a2.get("right_eye")
+                candidate_r1 = a1.get("pose_candidate_right_eye")
+                candidate_r2 = a2.get("pose_candidate_right_eye")
 
                 if r1 and r2 and r1.get("x") is not None and r2.get("x") is not None:
                     cross_dist_px = round(
@@ -448,6 +457,20 @@ class AnimalMetrologyPipeline:
                 else:
                     cross_dist_px = None
                     cross_dist_mm = None
+
+                pose_candidate_cross_dist_px = None
+                pose_candidate_cross_dist_mm = None
+                if candidate_r1 and candidate_r2:
+                    pose_candidate_cross_dist_px = round(
+                        self.euclidean_distance(
+                            (candidate_r1["x"], candidate_r1["y"]),
+                            (candidate_r2["x"], candidate_r2["y"]),
+                        ),
+                        2,
+                    )
+                    pose_candidate_cross_dist_mm = self.pixel_to_mm(
+                        pose_candidate_cross_dist_px
+                    )
 
                 pairwise_measurements.append(
                     {
@@ -462,6 +485,10 @@ class AnimalMetrologyPipeline:
                         "animal_2_interocular_dist_mm": a2.get("interocular_dist_mm"),
                         "right_eye_to_right_eye_dist_px": cross_dist_px,
                         "right_eye_to_right_eye_dist_mm": cross_dist_mm,
+                        "pose_candidate_animal_1_right_eye": candidate_r1,
+                        "pose_candidate_animal_2_right_eye": candidate_r2,
+                        "pose_candidate_right_eye_to_right_eye_dist_px": pose_candidate_cross_dist_px,
+                        "pose_candidate_right_eye_to_right_eye_dist_mm": pose_candidate_cross_dist_mm,
                     }
                 )
 
@@ -536,25 +563,34 @@ class AnimalMetrologyPipeline:
         animals = inference_results.get("animals", [])
         pairs = inference_results.get("pairwise_measurements", [])
 
-        # 1. Draw each segmented animal contour and its individual eyes
-        for animal in animals:
+        contour_colors = [
+            (0, 255, 255),
+            (255, 255, 0),
+            (255, 0, 255),
+            (0, 165, 255),
+        ]
+        valid_color = (0, 220, 0)
+        outside_color = (0, 0, 255)
+        candidate_line_color = (255, 80, 0)
+
+        # Draw instance-specific contour colors and the raw pose candidates.
+        for animal_index, animal in enumerate(animals):
             aid = animal["animal_id"]
             cname = animal.get("class_name", "animal")
             box = animal.get("bbox")
             polygon = animal.get("mask_polygon")
+            contour_color = contour_colors[animal_index % len(contour_colors)]
 
-            # 1a. Draw Semantic / Instance Segmentation Contour (YOLOv8-seg Mask)
             if polygon and len(polygon) > 0:
-                pts = np.array(polygon, dtype=np.int32).reshape((-1, 1, 2))
-                # Distinct contour outline
-                cv2.polylines(img, [pts], isClosed=True, color=(0, 230, 115), thickness=3)
-                # Translucent mask overlay
+                pts = np.rint(np.asarray(polygon, dtype=np.float32)).astype(np.int32)
+                pts = pts.reshape((-1, 1, 2))
                 overlay = img.copy()
-                cv2.fillPoly(overlay, [pts], color=(0, 230, 115))
-                cv2.addWeighted(overlay, 0.30, img, 0.70, 0, img)
+                cv2.fillPoly(overlay, [pts], color=contour_color)
+                cv2.addWeighted(overlay, 0.12, img, 0.88, 0, img)
+                cv2.polylines(img, [pts], isClosed=True, color=contour_color, thickness=2)
             elif box:
                 x1, y1, x2, y2 = map(int, box)
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 230, 115), 2)
+                cv2.rectangle(img, (x1, y1), (x2, y2), contour_color, 2)
 
             if box:
                 x1, y1, x2, y2 = map(int, box)
@@ -564,68 +600,109 @@ class AnimalMetrologyPipeline:
                     (x1, max(24, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (0, 230, 115),
+                    contour_color,
                     2,
                 )
 
-            # 1b. Individual eye keypoints
+            candidate_left = animal.get("pose_candidate_left_eye")
+            candidate_right = animal.get("pose_candidate_right_eye")
+            candidate_points = [candidate_left, candidate_right]
+            if candidate_left and candidate_right:
+                cv2.line(
+                    img,
+                    (round(candidate_left["x"]), round(candidate_left["y"])),
+                    (round(candidate_right["x"]), round(candidate_right["y"])),
+                    candidate_line_color,
+                    2,
+                )
+            for keypoint_index, point in enumerate(candidate_points):
+                if not point:
+                    continue
+                px, py = round(point["x"]), round(point["y"])
+                point_color = valid_color if point.get("inside_mask") else outside_color
+                if point.get("inside_mask"):
+                    cv2.circle(img, (px, py), 7, point_color, -1, cv2.LINE_AA)
+                else:
+                    cv2.drawMarker(
+                        img, (px, py), point_color, cv2.MARKER_CROSS, 18, 3, cv2.LINE_AA
+                    )
+                cv2.putText(
+                    img,
+                    f"K{keypoint_index + 1} {point.get('conf', 0):.2f}",
+                    (px + 9, py - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48,
+                    point_color,
+                    2,
+                    cv2.LINE_AA,
+                )
+
             le = animal.get("left_eye")
             re = animal.get("right_eye")
-
-            if le and le.get("x") is not None:
-                lx, ly = int(le["x"]), int(le["y"])
-                cv2.circle(img, (lx, ly), 5, (255, 80, 0), -1)
-                cv2.putText(
-                    img,
-                    "L",
-                    (lx + 6, ly - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 80, 0),
-                    2,
-                )
-
-            if re and re.get("x") is not None:
-                rx, ry = int(re["x"]), int(re["y"])
-                cv2.circle(img, (rx, ry), 5, (0, 80, 255), -1)
-                cv2.putText(
-                    img,
-                    "R",
-                    (rx + 6, ry - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 80, 255),
-                    2,
-                )
-
-            # Task 3: Draw single-animal interocular distance line
             if le and re and animal.get("interocular_dist_mm") is not None:
                 lx, ly = int(le["x"]), int(le["y"])
                 rx, ry = int(re["x"]), int(re["y"])
                 cv2.line(img, (lx, ly), (rx, ry), (0, 255, 255), 2)
 
-        # 2. Task 4: Draw cross-individual right-eye distance lines
+        # Draw validated and candidate cross-individual right-eye distances.
         for pair in pairs:
             dist_mm = pair.get("right_eye_to_right_eye_dist_mm")
-            try:
-                r1_str = pair.get("animal_1_right_eye", "").strip("()")
-                r2_str = pair.get("animal_2_right_eye", "").strip("()")
-                if "," in r1_str and "," in r2_str and dist_mm is not None:
-                    p1 = tuple(map(int, map(float, r1_str.split(","))))
-                    p2 = tuple(map(int, map(float, r2_str.split(","))))
+            if dist_mm is not None:
+                eye_strings = (
+                    pair.get("animal_1_right_eye", ""),
+                    pair.get("animal_2_right_eye", ""),
+                )
+                try:
+                    p1, p2 = [
+                        tuple(round(float(value)) for value in eye.strip("()").split(","))
+                        for eye in eye_strings
+                    ]
+                except (TypeError, ValueError):
+                    p1 = p2 = None
+                if p1 and p2:
                     cv2.line(img, p1, p2, (255, 0, 255), 2)
-            except Exception as e:
-                logger.debug("Annotation parse error: %s", e)
+            elif pair.get("pose_candidate_right_eye_to_right_eye_dist_mm") is not None:
+                candidate_eyes = (
+                    pair.get("pose_candidate_animal_1_right_eye"),
+                    pair.get("pose_candidate_animal_2_right_eye"),
+                )
+                if all(candidate_eyes):
+                    p1, p2 = [
+                        (round(eye["x"]), round(eye["y"])) for eye in candidate_eyes
+                    ]
+                    cv2.line(img, p1, p2, candidate_line_color, 2)
 
         valid_pairs = [
             pair for pair in pairs
             if pair.get("right_eye_to_right_eye_dist_mm") is not None
         ]
-        panel_width = 360
+        candidate_animals = [
+            animal for animal in animals
+            if animal.get("pose_candidate_interocular_dist_mm") is not None
+            and (
+                animal.get("interocular_dist_mm") is None
+                or not (
+                    animal["pose_candidate_left_eye"].get("inside_mask")
+                    and animal["pose_candidate_right_eye"].get("inside_mask")
+                )
+            )
+        ]
+        candidate_pairs = [
+            pair for pair in pairs
+            if pair.get("pose_candidate_right_eye_to_right_eye_dist_mm") is not None
+            and pair.get("right_eye_to_right_eye_dist_mm") is None
+        ]
+        panel_width = 390
         row_height = 24
+        panel_rows = (
+            len(animals)
+            + max(1, len(valid_pairs))
+            + len(candidate_animals)
+            + len(candidate_pairs)
+        )
         panel_height = max(
             image_height,
-            180 + (len(animals) + len(valid_pairs)) * row_height,
+            300 + panel_rows * row_height,
         )
         canvas = np.full(
             (panel_height, image_width + panel_width, 3),
@@ -656,7 +733,7 @@ class AnimalMetrologyPipeline:
         text_y += 30
         cv2.putText(
             canvas,
-            "Interocular distance",
+            "Interocular distance (mask-checked)",
             (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -692,7 +769,7 @@ class AnimalMetrologyPipeline:
         text_y += 24
         cv2.putText(
             canvas,
-            "Right-eye pair distance",
+            "Right-eye pair distance (mask-checked)",
             (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -731,6 +808,88 @@ class AnimalMetrologyPipeline:
                 cv2.LINE_AA,
             )
             text_y += row_height
+
+        text_y += 4
+        cv2.line(
+            canvas,
+            (text_x, text_y),
+            (image_width + panel_width - 16, text_y),
+            (95, 95, 95),
+            1,
+        )
+        text_y += 24
+        cv2.putText(
+            canvas,
+            "Unverified pose estimates*",
+            (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (0, 165, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        text_y += 22
+        for animal in candidate_animals:
+            distance = animal["pose_candidate_interocular_dist_mm"]
+            label = f"{animal['animal_id']} intra: {distance:.2f} mm"
+            cv2.putText(
+                canvas,
+                label,
+                (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (235, 235, 235),
+                1,
+                cv2.LINE_AA,
+            )
+            text_y += row_height
+        for pair in candidate_pairs:
+            distance = pair["pose_candidate_right_eye_to_right_eye_dist_mm"]
+            label = f"{pair['animal_1_id']} - {pair['animal_2_id']} R-R: {distance:.2f} mm"
+            cv2.putText(
+                canvas,
+                label,
+                (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (235, 235, 235),
+                1,
+                cv2.LINE_AA,
+            )
+            text_y += row_height
+        if not candidate_animals and not candidate_pairs:
+            cv2.putText(
+                canvas,
+                "No pose candidates available",
+                (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (190, 190, 190),
+                1,
+                cv2.LINE_AA,
+            )
+            text_y += row_height
+        cv2.putText(
+            canvas,
+            "*Pose weights trained on cats/dogs; mask inclusion",
+            (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.34,
+            (180, 180, 180),
+            1,
+            cv2.LINE_AA,
+        )
+        text_y += 17
+        cv2.putText(
+            canvas,
+            "does not confirm eye identity. Red X = outside mask.",
+            (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.34,
+            (180, 180, 180),
+            1,
+            cv2.LINE_AA,
+        )
 
         cv2.putText(
             canvas,

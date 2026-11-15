@@ -16,28 +16,55 @@ class FakeTensor:
     def numpy(self):
         return self.values
 
+    def __getitem__(self, index):
+        return FakeTensor(self.values[index])
+
 
 class FakeBoxes:
-    def __init__(self, boxes, classes):
+    def __init__(self, boxes, classes, confidences=None):
         self.xyxy = FakeTensor(boxes)
         self.cls = FakeTensor(classes)
+        self.conf = FakeTensor(confidences or [0.9] * len(boxes))
 
     def __len__(self):
         return len(self.xyxy.values)
 
 
+class FakeSegBox:
+    def __init__(self, box, class_id, confidence):
+        self.xyxy = FakeTensor([box])
+        self.cls = FakeTensor([class_id])
+        self.conf = FakeTensor([confidence])
+
+    def __len__(self):
+        return 1
+
+
+class FakeSegBoxes(list):
+    pass
+
+
+class FakeMasks:
+    def __init__(self, polygons):
+        self.xy = [np.asarray(polygon, dtype=np.float32) for polygon in polygons]
+
+    def __len__(self):
+        return len(self.xy)
+
+
 class FakePoseModel:
-    def __init__(self, keypoints, boxes=None, classes=None, names=None):
+    def __init__(self, keypoints, boxes=None, classes=None, names=None, confidences=None):
         self.keypoints = keypoints
         self.boxes = boxes or [[12, 12, 72, 72]]
         self.classes = classes or [0]
+        self.confidences = confidences
         self.names = names or {0: "cat", 1: "dog"}
         self.calls = []
 
     def predict(self, **kwargs):
         self.calls.append(kwargs)
         result = SimpleNamespace(
-            boxes=FakeBoxes(self.boxes, self.classes),
+            boxes=FakeBoxes(self.boxes, self.classes, self.confidences),
             keypoints=SimpleNamespace(data=FakeTensor(self.keypoints)),
             names=self.names,
         )
@@ -49,77 +76,56 @@ class EyeMaskTests(unittest.TestCase):
         self.pipeline = object.__new__(AnimalMetrologyPipeline)
         self.pipeline.pose_model = None
         self.pipeline.conf_threshold = 0.25
-        self.pipeline.pose_animal_conf_threshold = 0.4
         self.pipeline.pose_keypoint_conf_threshold = 0.1
-        self.pipeline.pose_crop_margin = 0.2
+        self.pipeline.pose_crop_margin = 0.08
         self.pipeline.device = "cpu"
         self.image = np.full((100, 100, 3), 255, dtype=np.uint8)
         self.bbox = [20, 20, 80, 80]
         self.square_mask = [[20, 20], [80, 20], [80, 80], [20, 80]]
 
-    def test_pose_points_are_mapped_from_expanded_animal_crop(self):
+    def test_pose_points_are_mapped_from_masked_contour_crop(self):
         self.pipeline.pose_model = FakePoseModel(
-            np.array([[[30, 30, 0.9], [70, 30, 0.8]]], dtype=float)
+            np.array([[[25, 30, 0.9], [55, 30, 0.8]]], dtype=float)
         )
 
-        left_eye, right_eye = self.pipeline._detect_eyes_within_mask(
-            self.image, self.bbox, self.square_mask, "cat"
+        left_eye, right_eye = self.pipeline._predict_eyes_in_segmented_roi(
+            self.image, self.square_mask
         )
 
-        self.assertEqual((left_eye["x"], left_eye["y"]), (38.0, 38.0))
-        self.assertEqual((right_eye["x"], right_eye["y"]), (78.0, 38.0))
+        self.assertEqual((left_eye["x"], left_eye["y"]), (41.0, 46.0))
+        self.assertEqual((right_eye["x"], right_eye["y"]), (71.0, 46.0))
+        self.assertTrue(left_eye["inside_mask"])
+        self.assertTrue(right_eye["inside_mask"])
         crop = self.pipeline.pose_model.calls[0]["source"]
-        self.assertEqual(crop.shape[:2], (84, 84))
+        self.assertEqual(crop.shape[:2], (69, 69))
 
-    def test_points_outside_instance_mask_are_rejected_without_fallback(self):
+    def test_candidate_outside_mask_is_returned_and_marked_unverified(self):
         self.pipeline.pose_model = FakePoseModel(
             np.array([[[42, 62, 0.9], [70, 14, 0.9]]], dtype=float)
         )
         triangle = [[50, 20], [80, 80], [20, 80]]
 
-        left_eye, right_eye = self.pipeline._detect_eyes_within_mask(
-            self.image, self.bbox, triangle, "cat"
+        left_eye, right_eye = self.pipeline._predict_eyes_in_segmented_roi(
+            self.image, triangle
         )
 
         self.assertIsNotNone(left_eye)
-        self.assertIsNone(right_eye)
+        self.assertIsNotNone(right_eye)
+        self.assertTrue(left_eye["inside_mask"])
+        self.assertFalse(right_eye["inside_mask"])
 
-    def test_pose_detection_must_match_segmented_animal_class(self):
+    def test_pose_class_is_not_filtered_against_segmentation_class(self):
         self.pipeline.pose_model = FakePoseModel(
             np.array([[[30, 30, 0.9], [70, 30, 0.9]]], dtype=float),
             classes=[1],
         )
 
-        left_eye, right_eye = self.pipeline._detect_eyes_within_mask(
-            self.image, self.bbox, self.square_mask, "cat"
+        left_eye, right_eye = self.pipeline._predict_eyes_in_segmented_roi(
+            self.image, self.square_mask
         )
 
-        self.assertIsNone(left_eye)
-        self.assertIsNone(right_eye)
-
-    def test_non_cat_dog_animals_do_not_get_eye_predictions(self):
-        self.pipeline.pose_model = FakePoseModel(
-            np.array([[[30, 30, 0.9], [70, 30, 0.9]]], dtype=float)
-        )
-
-        result = self.pipeline._detect_eyes_within_mask(
-            self.image, self.bbox, self.square_mask, "horse"
-        )
-
-        self.assertEqual(result, (None, None))
-        self.assertEqual(self.pipeline.pose_model.calls, [])
-
-    def test_low_confidence_segmented_cat_does_not_get_eye_predictions(self):
-        self.pipeline.pose_model = FakePoseModel(
-            np.array([[[30, 30, 0.9], [70, 30, 0.9]]], dtype=float)
-        )
-
-        result = self.pipeline._detect_eyes_within_mask(
-            self.image, self.bbox, self.square_mask, "cat", animal_confidence=0.32
-        )
-
-        self.assertEqual(result, (None, None))
-        self.assertEqual(self.pipeline.pose_model.calls, [])
+        self.assertIsNotNone(left_eye)
+        self.assertIsNotNone(right_eye)
 
     def test_missing_mask_returns_no_eye_coordinates(self):
         self.pipeline.pose_model = FakePoseModel(
@@ -127,12 +133,65 @@ class EyeMaskTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            self.pipeline._detect_eyes_within_mask(
-                self.image, self.bbox, None, "cat"
+            self.pipeline._predict_eyes_in_segmented_roi(
+                self.image, None
             ),
             (None, None),
         )
         self.assertEqual(self.pipeline.pose_model.calls, [])
+
+
+class SegmentedPosePipelineTests(unittest.TestCase):
+    def test_runs_pose_for_non_catdog_segments_and_computes_both_pair_distances(self):
+        pipeline = object.__new__(AnimalMetrologyPipeline)
+        pipeline.pose_model = FakePoseModel(
+            np.array([[[25, 30, 0.9], [55, 30, 0.8]]], dtype=float),
+            classes=[1],
+        )
+        pipeline.seg_model = SimpleNamespace(
+            predict=lambda **_: [
+                SimpleNamespace(
+                    boxes=FakeSegBoxes(
+                        [
+                            FakeSegBox([20, 20, 80, 80], 17, 0.32),
+                            FakeSegBox([110, 20, 170, 80], 23, 0.29),
+                        ]
+                    ),
+                    masks=FakeMasks(
+                        [
+                            [[20, 20], [80, 20], [80, 80], [20, 80]],
+                            [[110, 20], [170, 20], [170, 80], [110, 80]],
+                        ]
+                    ),
+                    names={17: "horse", 23: "giraffe"},
+                )
+            ]
+        )
+        pipeline.conf_threshold = 0.25
+        pipeline.iou_threshold = 0.45
+        pipeline.pose_keypoint_conf_threshold = 0.1
+        pipeline.pose_crop_margin = 0.08
+        pipeline.device = "cpu"
+        pipeline.pixel_to_mm_scale = 0.15
+        image = np.full((100, 200, 3), 255, dtype=np.uint8)
+
+        result = pipeline.infer(image, image_id="two_non_catdog.jpg")
+
+        self.assertEqual([animal["class_name"] for animal in result["animals"]], ["horse", "giraffe"])
+        self.assertEqual(result["animals"][0]["interocular_dist_px"], 30.0)
+        self.assertEqual(result["animals"][0]["pose_candidate_interocular_dist_mm"], 4.5)
+        self.assertEqual(
+            result["pairwise_measurements"][0][
+                "pose_candidate_right_eye_to_right_eye_dist_px"
+            ],
+            90.0,
+        )
+        self.assertEqual(
+            result["pairwise_measurements"][0][
+                "pose_candidate_right_eye_to_right_eye_dist_mm"
+            ],
+            13.5,
+        )
 
 
 class AnnotationLayoutTests(unittest.TestCase):

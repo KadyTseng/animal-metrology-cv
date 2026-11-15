@@ -20,6 +20,7 @@
   let pinnedTarget = null;
   let imageUrl = null;
   let imageReady = false;
+  const contourColors = ["#ffff00", "#00ffff", "#ff00ff", "#ffa500"];
 
   function setStatus(message, kind = "") {
     status.textContent = message;
@@ -104,20 +105,38 @@
         const target = { type: "animal", animalId: animal.animal_id };
         target.key = animalKey(animal.animal_id);
         const title = `${animal.animal_id} · ${animal.class_name}`;
-        const detail = `偵測信心 ${Number(animal.bbox_confidence).toFixed(2)} · 輪廓可互動`;
+        const candidate = animal.pose_candidate_interocular_dist_mm;
+        const official = animal.interocular_dist_mm;
+        const displayedDistance = official ?? candidate;
+        const hasUnverifiedPoint = [
+          animal.pose_candidate_left_eye,
+          animal.pose_candidate_right_eye,
+        ].some((point) => point && !point.inside_mask);
+        const detail = [
+          `偵測信心 ${Number(animal.bbox_confidence).toFixed(2)} · 輪廓可互動`,
+          official == null && candidate != null
+            ? `未驗證 Pose 估計 ${formatDistance(candidate)}`
+            : hasUnverifiedPoint && candidate != null
+              ? `另有未驗證候選 ${formatDistance(candidate)}`
+              : "遮罩內 Pose 估計；眼點語意未經真值驗證",
+        ]
+          .filter(Boolean)
+          .join(" · ");
         animalList.append(
-          makeCard(target, title, formatDistance(animal.interocular_dist_mm), detail),
+          makeCard(target, title, formatDistance(displayedDistance), detail),
         );
       }
     }
 
-    const validPairs = pairs.filter(
-      (pair) => pair.right_eye_to_right_eye_dist_mm != null,
+    const displayPairs = pairs.filter(
+      (pair) =>
+        pair.right_eye_to_right_eye_dist_mm != null ||
+        pair.pose_candidate_right_eye_to_right_eye_dist_mm != null,
     );
-    if (!validPairs.length) {
+    if (!displayPairs.length) {
       pairList.innerHTML = '<p class="empty-list">沒有可用的右眼配對距離</p>';
     } else {
-      for (const pair of validPairs) {
+      for (const pair of displayPairs) {
         const target = {
           type: "pair",
           animal1Id: pair.animal_1_id,
@@ -128,8 +147,13 @@
           makeCard(
             target,
             `${pair.animal_1_id} ↔ ${pair.animal_2_id}`,
-            formatDistance(pair.right_eye_to_right_eye_dist_mm),
-            "右眼到右眼",
+            formatDistance(
+              pair.right_eye_to_right_eye_dist_mm ??
+                pair.pose_candidate_right_eye_to_right_eye_dist_mm,
+            ),
+            pair.right_eye_to_right_eye_dist_mm == null
+              ? "未驗證 Pose 預估：右眼到右眼"
+              : "右眼到右眼（遮罩內估計；眼點語意未驗證）",
           ),
         );
       }
@@ -160,7 +184,7 @@
     return [];
   }
 
-  function drawPolygon(animal, highlighted) {
+  function drawPolygon(animal, highlighted, animalIndex) {
     const polygon = animalPolygon(animal);
     if (polygon.length < 3) return;
 
@@ -170,14 +194,17 @@
       context.lineTo(polygon[index][0], polygon[index][1]);
     }
     context.closePath();
-    context.fillStyle = highlighted ? "rgba(23, 75, 138, 0.22)" : "rgba(20, 190, 105, 0.17)";
+    const color = contourColors[animalIndex % contourColors.length];
+    context.fillStyle = highlighted
+      ? "rgba(23, 75, 138, 0.22)"
+      : `${color}26`;
     context.fill();
-    context.strokeStyle = highlighted ? "#174b8a" : "#10a965";
+    context.strokeStyle = highlighted ? "#174b8a" : color;
     context.lineWidth = highlighted ? 5 : 2.5;
     context.stroke();
   }
 
-  function drawLine(start, end, color, width) {
+  function drawLine(start, end, color, width, dashed = false) {
     if (!start || !end) return;
     context.beginPath();
     context.moveTo(start.x, start.y);
@@ -185,7 +212,30 @@
     context.strokeStyle = color;
     context.lineWidth = width;
     context.lineCap = "round";
+    context.setLineDash(dashed ? [7, 5] : []);
     context.stroke();
+    context.setLineDash([]);
+  }
+
+  function drawPoseCandidate(point) {
+    if (!point || point.x == null || point.y == null) return;
+    context.beginPath();
+    if (point.inside_mask) {
+      context.arc(point.x, point.y, 6, 0, Math.PI * 2);
+      context.fillStyle = "#00dc00";
+      context.fill();
+      context.strokeStyle = "#fff";
+      context.lineWidth = 1.5;
+      context.stroke();
+    } else {
+      context.moveTo(point.x - 6, point.y - 6);
+      context.lineTo(point.x + 6, point.y + 6);
+      context.moveTo(point.x + 6, point.y - 6);
+      context.lineTo(point.x - 6, point.y + 6);
+      context.strokeStyle = "#ff0000";
+      context.lineWidth = 2.5;
+      context.stroke();
+    }
   }
 
   function renderCanvas() {
@@ -194,31 +244,71 @@
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
 
-    for (const animal of inference.animals || []) {
-      drawPolygon(animal, target?.type === "animal" && target.animalId === animal.animal_id);
-    }
+    (inference.animals || []).forEach((animal, index) => {
+      drawPolygon(
+        animal,
+        target?.type === "animal" && target.animalId === animal.animal_id,
+        index,
+      );
+    });
 
     for (const animal of inference.animals || []) {
+      const candidateLeft = animal.pose_candidate_left_eye;
+      const candidateRight = animal.pose_candidate_right_eye;
+      if (
+        animal.interocular_dist_mm == null &&
+        candidateLeft &&
+        candidateRight
+      ) {
+        const selected = target?.type === "animal" && target.animalId === animal.animal_id;
+        const lineSelected = target?.type === "eye" && target.animalId === animal.animal_id;
+        drawLine(
+          candidateLeft,
+          candidateRight,
+          selected || lineSelected ? "#123b70" : "#0050ff",
+          selected || lineSelected ? 4 : 2,
+          true,
+        );
+      }
       if (!animal.left_eye || !animal.right_eye) continue;
       const selected = target?.type === "animal" && target.animalId === animal.animal_id;
       const lineSelected = target?.type === "eye" && target.animalId === animal.animal_id;
       drawLine(
         animal.left_eye,
         animal.right_eye,
-        selected || lineSelected ? "#123b70" : "#ffd84a",
+        selected || lineSelected ? "#123b70" : "#ffff00",
         selected || lineSelected ? 5 : 2.5,
       );
     }
 
     for (const pair of inference.pairwise_measurements || []) {
-      if (pair.right_eye_to_right_eye_dist_mm == null) continue;
-      const start = pointFromString(pair.animal_1_right_eye);
-      const end = pointFromString(pair.animal_2_right_eye);
+      const candidate = pair.right_eye_to_right_eye_dist_mm == null;
+      if (
+        candidate &&
+        pair.pose_candidate_right_eye_to_right_eye_dist_mm == null
+      ) continue;
+      const start = candidate
+        ? pair.pose_candidate_animal_1_right_eye
+        : pointFromString(pair.animal_1_right_eye);
+      const end = candidate
+        ? pair.pose_candidate_animal_2_right_eye
+        : pointFromString(pair.animal_2_right_eye);
       const selected = target?.type === "pair" && pairKey(pair) === target.key;
-      drawLine(start, end, selected ? "#123b70" : "#d83bc7", selected ? 5 : 2);
+      drawLine(
+        start,
+        end,
+        selected ? "#123b70" : candidate ? "#0050ff" : "#ff00ff",
+        selected ? 5 : 2,
+        candidate,
+      );
     }
 
     for (const animal of inference.animals || []) {
+      if (animal.pose_candidate_left_eye || animal.pose_candidate_right_eye) {
+        drawPoseCandidate(animal.pose_candidate_left_eye);
+        drawPoseCandidate(animal.pose_candidate_right_eye);
+        continue;
+      }
       for (const [eye, color] of [
         [animal.left_eye, "#1769d2"],
         [animal.right_eye, "#e25835"],
@@ -277,9 +367,17 @@
     const threshold = 9 / scale;
 
     for (const pair of inference.pairwise_measurements || []) {
-      if (pair.right_eye_to_right_eye_dist_mm == null) continue;
-      const start = pointFromString(pair.animal_1_right_eye);
-      const end = pointFromString(pair.animal_2_right_eye);
+      const candidate = pair.right_eye_to_right_eye_dist_mm == null;
+      if (
+        candidate &&
+        pair.pose_candidate_right_eye_to_right_eye_dist_mm == null
+      ) continue;
+      const start = candidate
+        ? pair.pose_candidate_animal_1_right_eye
+        : pointFromString(pair.animal_1_right_eye);
+      const end = candidate
+        ? pair.pose_candidate_animal_2_right_eye
+        : pointFromString(pair.animal_2_right_eye);
       if (nearLine(point, start, end, threshold)) {
         const target = {
           type: "pair",
@@ -292,11 +390,14 @@
     }
 
     for (const animal of inference.animals || []) {
-      if (
-        animal.left_eye &&
-        animal.right_eye &&
-        nearLine(point, animal.left_eye, animal.right_eye, threshold)
-      ) {
+      const validated = animal.interocular_dist_mm != null;
+      const start = validated
+        ? animal.left_eye
+        : animal.pose_candidate_left_eye;
+      const end = validated
+        ? animal.right_eye
+        : animal.pose_candidate_right_eye;
+      if (start && end && nearLine(point, start, end, threshold)) {
         const target = { type: "eye", animalId: animal.animal_id };
         target.key = animalKey(animal.animal_id);
         return target;

@@ -43,13 +43,25 @@ def visualize_image(pipeline: AnimalMetrologyPipeline, image_path: Path, output_
         output_path,
         results["detected_animals_count"],
     )
+    logger.info(
+        "Pose keypoints are model estimates; mask inclusion does not verify anatomical eye identity."
+    )
+    for animal in results["animals"]:
+        logger.info(
+            "  -> %s interocular distance (mask-checked) = %s mm",
+            animal["animal_id"],
+            animal.get("interocular_dist_mm"),
+        )
     for p in results["pairwise_measurements"]:
         logger.info(
-            "  -> Pair %s <-> %s: R-R Dist = %s mm",
+            "  -> Pair %s <-> %s: mask-checked R-R estimate = %s mm",
             p["animal_1_id"],
             p["animal_2_id"],
             p.get("right_eye_to_right_eye_dist_mm"),
         )
+        candidate_distance = p.get("pose_candidate_right_eye_to_right_eye_dist_mm")
+        if p.get("right_eye_to_right_eye_dist_mm") is None and candidate_distance is not None:
+            logger.info("     Unverified pose candidate R-R distance = %.2f mm", candidate_distance)
     return output_path
 
 

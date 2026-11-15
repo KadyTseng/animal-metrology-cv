@@ -8,7 +8,7 @@
 
 ## 專業測驗題目
 
-本專案要處理的題目是將圖像分割（Image Segmentation）模型的輸出應用於實際測量學（Metrology）任務：
+本專案依據以下規格，將圖像分割（Image Segmentation）模型的輸出應用於測量學（Metrology）：
 
 1. 使用 COCO 資料集，挑選至少包含兩隻動物的影像，動物種類不限。
 2. 使用分割模型標示動物輪廓，並定位各動物的眼睛。
@@ -17,20 +17,20 @@
 5. 說明使用的 AI 模型、選用原因及評估指標公式。
 6. 說明量測方法、計算公式與驗證方式。
 
-**實作範圍提醒：**本專案以實例分割遮罩呈現動物輪廓，並以姿態關鍵點定位貓狗眼睛（不是眼睛區域分割）。目前 CSV 範例使用的 `2ats.jpg` 不是 COCO 影像，因此不能視為已完成 COCO 多動物案例驗證；資料與模型適用範圍詳見下文。
+**實作範圍與驗證狀態：**動物輪廓由實例分割遮罩呈現；貓狗眼睛以姿態關鍵點定位，並非眼睛區域分割。目前 CSV 示範使用非 COCO 影像，因此不代表已完成 COCO 多動物量測驗證。資料與模型適用範圍詳見下文。
 
 ## 📖 專案簡介 (Introduction)
 
 **`animal-metrology-cv`** 是一套用於動物影像分析與形態距離計算的電腦視覺測量系統。
 
-流程分成兩個模型階段：**YOLOv8-seg** 先取得每隻動物的實例遮罩與外接框；再將外接框向外擴展後，交給微調過的 **YOLOv8-pose** 只偵測貓狗的左右眼。姿態模型結果會再受該動物的分割遮罩約束；點位不在遮罩內就不採用。最後依既有比例尺計算像素距離與毫米距離。
+推論流程分為兩階段：**YOLOv8-seg** 取得各動物的實例遮罩與外接框；擴展外接框後，使用微調的 **YOLOv8-pose** 定位貓狗左右眼。眼點須符合動物類別，並位於對應的實例遮罩內，才納入距離計算。最後依設定的比例尺將像素距離換算為毫米。
 
 - **任務 3 (Task 3)**：單隻動物個體之**雙眼距離 (Interocular Distance)** 計算（像素轉實體毫米 mm）。
 - **任務 4 (Task 4)**：畫面中任意兩隻動物間**右眼至右眼跨個體距離 (Cross-Individual Right-Eye Distance)** 計算。
 - **數據管線與輸出**：提供即時 RESTful API 服務與結構化 CSV 批次報告輸出。
 - **互動式前端**：使用者可上傳照片；滑過輪廓或量測線時，右側量測卡片會反白，文字不覆蓋影像。
 
-此版本的輪廓模型使用 COCO 預訓練權重；眼睛關鍵點模型只對貓、狗提供左右眼定位。眼睛是關鍵點，不是眼睛區域分割遮罩。`2ats.jpg` 範例用來展示兩隻貓的流程；該照片不作為 COCO 來源圖片，也不納入公開套件。
+輪廓模型使用 COCO 預訓練權重；眼睛關鍵點模型目前僅支援貓與狗。眼睛以關鍵點表示，不輸出眼睛區域遮罩。
 
 ---
 
@@ -105,7 +105,7 @@ flowchart TD
 - 動物實例分割使用 COCO 預訓練的 `yolov8n-seg.pt`，可分割其 COCO 類別中的多種動物。
 - 左右眼模型從 `yolov8n-pose.pt` 起始，以 Animal-Pose 的 400 張貓狗影像重新訓練；分類各 200 張，缺失眼點以不可見關鍵點處理。
 - 因此，目前只有貓與狗會產生眼點及距離；其他動物可以有分割輪廓，但不會有眼睛量測。
-- `2ats.jpg` 是本機示範影像，不是 COCO 樣本；原始影像和訓練資料未放入套件。請使用具合法使用權的資料。
+- 示範影像、訓練資料及模型權重不隨原始碼發佈；使用者須自行取得具合法使用權的影像及所需模型檔案。
 
 ---
 
@@ -174,7 +174,7 @@ cp /path/to/yolov8n-seg.pt models/yolov8n-seg.pt
 cp /path/to/animal_eye_pose.pt models/animal_eye_pose.pt
 ```
 
-提供的原始碼 ZIP 不包含模型權重、原始照片、訓練資料、推論輸出或 `.env`。因此不會打包舊的 100 張資料 checkpoint；目前 400 張資料訓練出的 checkpoint 也不包含在 ZIP 中，避免未確認模型與訓練資料授權前代為再散布。啟動推論前，請自行提供 YOLOv8-seg 的 `yolov8n-seg.pt` 與相容的兩關鍵點貓狗 Pose 權重，放入 `models/` 並確認其來源授權。`.env.example` 已設定對應路徑。
+原始碼發行版不包含模型權重、影像、訓練資料、推論輸出或 `.env`。執行推論前，須自行取得 YOLOv8-seg 權重及相容的雙眼關鍵點 Pose 權重，放入 `models/`，並確認其授權允許相應用途。`.env.example` 提供預設檔案路徑。
 
 ### 步驟 4：啟動互動式前端與推論
 
@@ -186,15 +186,15 @@ uvicorn src.api:app --host 127.0.0.1 --port 8000
 - Swagger API 文件：`http://127.0.0.1:8000/docs`
 - ReDoc API 文件：`http://127.0.0.1:8000/redoc`
 
-使用者可在前端選擇照片、調整比例尺後按「開始偵測」。也可以用 CLI 對單張或整個資料夾推論：
+在前端選取影像並設定比例尺後，按「開始偵測」。亦可使用 CLI 對單張影像或整個資料夾進行推論：
 
 ```bash
 python src/visualize.py \
-  --image data/raw/only_cats_dogs/2ats.jpg \
+  --image path/to/your-image.jpg \
   --output-dir outputs/annotated/demo --device 0
 
 python src/visualize.py \
-  --input-dir data/raw/only_cats_dogs \
+  --input-dir path/to/your-image-folder \
   --output-dir outputs/annotated/seg_pose_400 --device 0
 ```
 
@@ -272,13 +272,13 @@ curl -f http://127.0.0.1:8000/health
 curl -X POST "http://127.0.0.1:8000/predict?pixel_to_mm_scale=0.15&save_to_csv=false" \
   -H "accept: application/json" \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@data/raw/only_cats_dogs/2ats.jpg"
+  -F "file=@path/to/your-image.jpg"
 ```
-上述影像路徑是本機示例；公開程式套件不附照片，請改用具有合法使用權的圖片。
+請將影像路徑替換為具合法使用權的本機圖片。
 
-### `2ats.jpg` 測量範例
+### 雙貓示範影像量測結果（非 COCO）
 
-使用最新貓狗 Pose 權重與 `0.15 mm/px` 範例比例尺，模型在這張影像偵測到兩隻貓：
+以下為非 COCO 雙貓示範影像的模型預測結果，使用 `0.15 mm/px` 範例比例尺：
 
 | 測量項目 | 範例結果 |
 | :--- | ---: |
@@ -286,15 +286,15 @@ curl -X POST "http://127.0.0.1:8000/predict?pixel_to_mm_scale=0.15&save_to_csv=f
 | animal_2 雙眼距離 | 4.519 mm |
 | 兩隻動物右眼至右眼距離 | 42.411 mm |
 
-完整 CSV 範例位於 [`examples/sample_measurements.csv`](examples/sample_measurements.csv)。這些是模型預測值；`0.15 mm/px` 只是目前示範設定，並未用 2ats 照片中的實體標尺校正，不能視為具校正追溯性的實際物理尺寸。
+完整 CSV 範例位於 [`examples/sample_measurements.csv`](examples/sample_measurements.csv)。數值為模型預測結果；`0.15 mm/px` 僅為示範值，未經影像中的實體標尺校正，不應視為可追溯的實際物理尺寸。
 
-CSV 只記錄影像參照路徑與量測數值，不內嵌或附帶任何照片。這筆 `2ats.jpg` 是本機使用者提供的示範影像，**不是 COCO 影像**；它用來展示雙動物的眼距和跨個體右眼距離，不可當作「COCO 多動物照片」的驗證證據。請勿把同名本機照片加入公開套件。
+CSV 僅記錄影像識別資訊與量測值，不包含原始影像。此示範影像**不是 COCO 影像**，僅用於說明雙眼距離及跨個體右眼距離的計算，不能作為 COCO 多動物案例的驗證結果。
 
 ### COCO 資料集範圍與限制
 
-- 專案的 YOLOv8-seg 使用 COCO 預訓練權重；本機 `data/raw/` 中曾有多隻馬、斑馬、長頸鹿與大象等 COCO 樣本。原始影像不包含在程式碼 ZIP 中。
+- 專案的 YOLOv8-seg 使用 COCO 預訓練權重；本儲存庫未包含 COCO 原始影像。
 - 眼睛模型是使用 Animal-Pose 貓狗資料微調的兩點 YOLOv8-Pose；目前只支援貓、狗。因此，非貓狗 COCO 影像可做動物輪廓分割，但不會產生眼點或眼距。
-- 本次可交付的 CSV 範例是使用者提供的雙貓影像，而不是 COCO。由於未將一張可合法再散布、且包含至少兩隻貓狗的 COCO 影像及其推論結果納入套件，本專案目前**不能聲稱已用該 CSV 完成 COCO 多動物眼距驗證**。對外報告時應明確區分 COCO segmentation 預訓練來源、Animal-Pose 關鍵點訓練資料，以及本機 demo 量測樣本。
+- 儲存庫中的 CSV 示範並非 COCO 影像推論結果，因此尚未示範符合題目條件的 COCO 多動物眼距案例。COCO 分割預訓練資料、Animal-Pose 關鍵點訓練資料及示範量測影像為不同資料來源，評估結果應分別說明。
 
 ---
 
@@ -313,7 +313,7 @@ CSV 只記錄影像參照路徑與量測數值，不內嵌或附帶任何照片�
    - 這樣可以讓姿態模型專注於每隻動物的局部畫面；代價是每個貓狗個體都要額外執行一次姿態推論，整體速度取決於影像中的個體數量與硬體。
 2. **免從頭訓練與強大的遷移學習能力 (Transfer Learning & Pre-trained Priors)**：
    - 特殊動物（如特定品種牛隻、羊隻、瀕危物種）的解剖影像標註極為昂貴且困難，難以收集數十萬張影像從零訓練 (From Scratch)。
-   - 本專案使用 COCO 預訓練的 `yolov8n-pose.pt` 作為起點，將姿態輸出調整為兩個眼睛關鍵點，再用標註的貓狗圖片微調。少量資料適合做初步實驗，實際泛化能力仍須以獨立測試集和使用者影像評估。
+   - 本專案以 COCO 預訓練的 `yolov8n-pose.pt` 為起點，將姿態輸出調整為左右眼兩個關鍵點，再以標註的貓狗影像微調。模型泛化能力仍須以獨立測試集及目標應用影像評估。
 3. **Anchor-Free 設計與尺度適應性**：
    - 動物在攝像鏡頭前的姿態多變（站立、俯臥、側身）、體型大小跨度極大。YOLOv8 捨棄傳統複雜且僵硬的 Anchor Boxes，改採無錨點 (Anchor-Free) 迴歸中心點與關鍵點偏移，顯著減低對超參數預設的敏感度，改善關鍵點定位精度。
 
@@ -488,16 +488,14 @@ flowchart LR
 
 本專案原始碼目前未附 `LICENSE`，因此尚未授予他人依特定開源條款使用、修改或再散布本專案程式碼的權利。公開程式碼前，應先由專案負責人決定並加入適用的程式碼授權。
 
-下列模型、資料或影像不是本專案原創，提供給主管或公開發布前，應逐項確認其原始授權是否允許複製、修改及再散布；僅在 README 標示來源不代表已取得再散布權：
+下列第三方模型、資料集與影像適用各自的來源條款。將其納入發行、部署或公開發布前，應確認授權是否允許相應的使用與再散布；僅標示來源不代表已取得再散布權：
 
-| 素材 | 專案中的檔案／來源 | 分享前要確認的事項 |
+| 素材 | 專案中的檔案／來源 | 分發前應確認事項 |
 | :--- | :--- | :--- |
 | Ultralytics YOLO 權重 | `yolov8n-seg.pt`、`yolov8n-pose.pt` | 確認 Ultralytics 適用的 AGPL-3.0 或 Enterprise 授權條款，以及權重再散布方式。參考 [Ultralytics License](https://www.ultralytics.com/license) 與 [授權原文](https://github.com/ultralytics/ultralytics/blob/main/LICENSE)。 |
-| 本專案微調的 400 張貓狗眼睛模型 | `runs/pose/runs/pose/animalpose_eye_400_fresh/weights/best.pt` | 這是由預訓練權重及 Animal-Pose 訓練資料衍生的 checkpoint；需一併確認模型來源條款及訓練資料授權是否允許分享衍生權重。 |
-| 舊的 100 張模型 | `runs/pose/train/weights/best.pt` | 舊版實驗 checkpoint；非目前建議使用的模型。若要另行分享，同樣須確認其預訓練權重及資料集條款。 |
-| COCO 影像與標註 | 本機 `data/raw/` 中的 COCO 樣本及其來源 | COCO 影像可能各自沿用原始影像的授權；分享前應依 COCO 資料集頁面及個別影像來源確認條款。參考 [COCO Dataset](https://cocodataset.org/)。 |
-| Animal-Pose 訓練影像與標註 | 本機 `data/animalpose_eye_yolo/` | 確認原始 Animal-Pose 資料及各影像的使用、修改與再散布條款；不要只因已下載或已轉成 YOLO 標註格式就假設可再散布。 |
-| 使用者示範照與其標註輸出 | `2ats.jpg`、由該影像產生的標註圖 | 確認照片權利人授權涵蓋複製及交付；量測 CSV 只記錄影像參照與數值，不附照片。 |
-| 環境設定 | `.env` | 不得分享或提交，可能包含 API key 等秘密資訊。分享設定時只提供 `.env.example`，並確認其中只有範例值。 |
+| 微調的貓狗眼睛模型 | 兩關鍵點 Pose checkpoint（不含於原始碼儲存庫） | 由預訓練權重及 Animal-Pose 訓練資料衍生；分發前應確認基礎模型及訓練資料條款允許散布衍生權重。 |
+| COCO 影像與標註 | COCO 資料集影像及其來源 | COCO 影像可能各自沿用原始影像的授權；應依 COCO 資料集頁面及個別影像來源確認條款。參考 [COCO Dataset](https://cocodataset.org/)。 |
+| Animal-Pose 訓練影像與標註 | Animal-Pose 來源資料及其轉換標註 | 確認原始資料集及各影像的使用、修改與再散布條款；轉換標註格式不會自動產生再散布權。 |
+| 示範影像與其標註輸出 | 雙貓示範影像及其衍生標註圖 | 確認來源授權涵蓋複製與再散布；CSV 僅記錄影像參照與量測數值，不附原圖。 |
 
-分享前可先檢查 `.gitignore` 與 `git status`。原始碼 ZIP 預設不包含照片、資料集、模型權重、推論輸出或 `.env`；如需提供素材供主管審查，請先核准相應授權，再使用獨立的審查資料夾傳遞。
+原始碼儲存庫不包含第三方影像、訓練資料、模型權重或推論影像。`.env` 可能含 API key 等機密設定，不得提交或轉交；環境設定範例請使用 `.env.example`，並避免填入有效憑證。

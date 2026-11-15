@@ -1,0 +1,17 @@
+.env
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.log
+*.cache
+.DS_Store
+*.pt
+models/
+runs/
+data/raw/
+data/processed/*
+data/animalpose_eye_yolo/
+outputs/
+*.zip

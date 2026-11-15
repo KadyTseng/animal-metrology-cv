@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Animal Metrology CV</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+    <script src="/ui/app.js" defer></script>
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">ANIMAL METROLOGY CV</p>
+        <h1>動物眼距互動量測</h1>
+        <p class="subtitle">上傳照片後查看分割輪廓、眼點及距離；滑過輪廓或量測線即可反白對應結果。</p>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="viewer" aria-label="影像檢視區">
+        <div class="toolbar">
+          <input id="image-file" type="file" accept="image/jpeg,image/png,image/webp">
+          <label class="file-picker" for="image-file">選擇照片</label>
+          <label class="scale-control" for="scale-input">
+            比例尺
+            <input id="scale-input" type="number" min="0.0001" step="0.01" value="0.15">
+            <span>mm/px</span>
+          </label>
+          <button id="detect-button" class="primary-button" type="button" disabled>開始偵測</button>
+        </div>
+
+        <div id="empty-state" class="empty-state">
+          <strong>載入一張動物照片</strong>
+          <span>支援 JPG、PNG、WEBP；目前眼睛關鍵點模型適用於貓與狗。</span>
+        </div>
+
+        <div id="canvas-wrap" class="canvas-wrap" hidden>
+          <canvas id="result-canvas" aria-label="動物分割與量測互動影像"></canvas>
+        </div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <aside class="measurements" aria-label="量測摘要">
+        <div class="panel-heading">
+          <p class="eyebrow">RESULTS</p>
+          <h2>量測摘要</h2>
+          <p id="result-meta" class="panel-hint">偵測結果會顯示在這裡</p>
+        </div>
+
+        <section class="measurement-section">
+          <h3>個體雙眼距離</h3>
+          <div id="animal-measurements" class="measurement-list">
+            <p class="empty-list">尚無量測資料</p>
+          </div>
+        </section>
+
+        <section class="measurement-section">
+          <h3>個體間右眼距離</h3>
+          <div id="pair-measurements" class="measurement-list">
+            <p class="empty-list">尚無量測資料</p>
+          </div>
+        </section>
+
+        <p class="scale-note">毫米數值依目前比例尺換算；正式量測前請先校正相機與拍攝平面。</p>
+      </aside>
+    </main>
+  </body>
+</html>

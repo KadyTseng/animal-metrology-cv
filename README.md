@@ -327,7 +327,9 @@ CSV 只記錄影像參照路徑與量測數值，不內嵌或附帶任何照片�
 
 OKS 衡量預測的解剖關鍵點與標註真值 (Ground Truth, GT) 之間的相似程度，其數學形式類似於目標檢測中的 IoU，值域落在 $[0, 1]$：
 
-$$OKS = \frac{\sum_{i} \exp\left(-\frac{d_i^2}{2 s^2 \sigma_i^2}\right) \delta(v_i > 0)}{\sum_i \delta(v_i > 0)}$$
+$$
+OKS = \frac{\sum_{i} \exp\left(-\frac{d_i^2}{2 s^2 \sigma_i^2}\right) \delta(v_i > 0)}{\sum_i \delta(v_i > 0)}
+$$
 
 **參數幾何與物理意涵解析：**
 - $d_i = \sqrt{(x_i - \hat{x}_i)^2 + (y_i - \hat{y}_i)^2}$：第 $i$ 個關鍵點之**預測座標 $(\hat{x}_i, \hat{y}_i)$ 與真值座標 $(x_i, y_i)$ 間的歐幾里得像素距離**。
@@ -343,16 +345,26 @@ $$OKS = \frac{\sum_{i} \exp\left(-\frac{d_i^2}{2 s^2 \sigma_i^2}\right) \delta(v
 在特定 OKS 門檻 $T$（如 $T = 0.5$ 或 $T = 0.75$）下，若某檢測結果滿足 $OKS \ge T$，則將該預測判定為 True Positive (TP)，否則為 False Positive (FP)。
 
 1. **精確率 (Precision, $P$) 與召回率 (Recall, $R$)**：
-   $$P(t) = \frac{TP(t)}{TP(t) + FP(t)}, \quad R(t) = \frac{TP(t)}{TP(t) + FN(t)}$$
+
+   $$
+   P(t) = \frac{TP(t)}{TP(t) + FP(t)}, \quad R(t) = \frac{TP(t)}{TP(t) + FN(t)}
+   $$
 
 2. **單一類別平均精確率 (Average Precision, AP)**：
    透過計算 Precision-Recall 曲線下的面積進行數值積分（通常採用 101 點插值法）：
-   $$AP = \int_0^1 P_{\text{interp}}(r) \, dr$$
+
+   $$
+   AP = \int_0^1 P_{\text{interp}}(r) \, dr
+   $$
+
    其中 $P_{\text{interp}}(r) = \max_{\tilde{r} \ge r} P(\tilde{r})$。
 
 3. **全類別平均精確率 (mAP)**：
    對所有目標類別集合 $C$ 取期望值：
-   $$mAP = \frac{1}{|C|} \sum_{c \in C} AP_c$$
+
+   $$
+   mAP = \frac{1}{|C|} \sum_{c \in C} AP_c
+   $$
 
 4. **綜合評估指標 $mAP@[0.5:0.95]$**：
    在 OKS 門檻由 0.50 遞增至 0.95（步長 0.05，共 10 個門檻階梯）下分別計算 mAP 並取平均值，代表模型在嚴苛幾何約束下的整體穩健度。
@@ -369,15 +381,25 @@ $$OKS = \frac{\sum_{i} \exp\left(-\frac{d_i^2}{2 s^2 \sigma_i^2}\right) \delta(v
 
 在 2D 數位影像平面上，任兩組解剖關鍵點座標 $P_1(x_1, y_1)$ 與 $P_2(x_2, y_2)$ 之空間幾何直線距離定義如下：
 
-$$d_{\text{pixel}} = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}$$
+$$
+d_{\text{pixel}} = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}
+$$
 
 ##### 任務 3：單隻動物個體之雙眼距離 (Interocular Distance)
-設單隻動物個體經關鍵點檢測所得之左眼中心座標為 $P_{\text{left}}(x_L, y_L)$，右眼中心座標為 $P_{\text{right}}(x_R, y_R)$，則個體眼距為：
-$$d_{\text{intra\_eye, px}} = \sqrt{(x_R - x_L)^2 + (y_R - y_L)^2}$$
+
+設單隻動物個體經關鍵點檢測所得之左眼中心座標為 $P_{\mathrm{left}}(x_L, y_L)$，右眼中心座標為 $P_{\mathrm{right}}(x_R, y_R)$，則個體眼距為：
+
+$$
+d_{\text{intra-eye, px}} = \sqrt{(x_R - x_L)^2 + (y_R - y_L)^2}
+$$
 
 ##### 任務 4：任意兩隻動物間右眼至右眼跨個體距離 (Inter-Animal Distance)
-設個體 $A$ 的右眼中心為 $P_{A\_R}(x_{A\_R}, y_{A\_R})$，個體 $B$ 的右眼中心為 $P_{B\_R}(x_{B\_R}, y_{B\_R})$，兩者右眼間的跨個體距離為：
-$$d_{\text{inter\_eye, px}} = \sqrt{(x_{B\_R} - x_{A\_R})^2 + (y_{B\_R} - y_{A\_R})^2}$$
+
+設個體 $A$ 的右眼中心為 $P_{A,R}(x_{A,R}, y_{A,R})$，個體 $B$ 的右眼中心為 $P_{B,R}(x_{B,R}, y_{B,R})$，兩者右眼間的跨個體距離為：
+
+$$
+d_{\text{inter-eye, px}} = \sqrt{(x_{B,R} - x_{A,R})^2 + (y_{B,R} - y_{A,R})^2}
+$$
 
 ---
 
@@ -388,16 +410,22 @@ $$d_{\text{inter\_eye, px}} = \sqrt{(x_{B\_R} - x_{A\_R})^2 + (y_{B\_R} - y_{A\_
 ##### (A) 線性比例轉換模型
 定義比例轉換係數 $s$（單位：$\text{mm/pixel}$）：
 
-$$s = \frac{D_{\text{known, mm}}}{d_{\text{known, px}}}$$
+$$
+s = \frac{D_{\text{known, mm}}}{d_{\text{known, px}}}
+$$
 
 任何由演算法測得之像素距離 $d_{\text{pixel}}$，其對應的物理真值換算公式為：
 
-$$D_{\text{physical, mm}} = d_{\text{pixel}} \times s$$
+$$
+D_{\text{physical, mm}} = d_{\text{pixel}} \times s
+$$
 
 ##### (B) 光學成像模型與幾何物理條件
 針孔相機模型 (Pinhole Camera Model) 表明：
 
-$$d_{\text{px}} = f \cdot \frac{D_{\text{real}}}{Z}$$
+$$
+d_{\text{px}} = f \cdot \frac{D_{\text{real}}}{Z}
+$$
 
 其中 $f$ 為鏡頭焦距 (以像素計)，$Z$ 為物體距離感測平面的工作深度 (Depth)。比例尺 $s = \frac{Z}{f}$ 之有效性需依賴以下關鍵工程前提：
 1. **共面假設 (Coplanar Assumption)**：

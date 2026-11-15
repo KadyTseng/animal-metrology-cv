@@ -217,25 +217,21 @@
     context.setLineDash([]);
   }
 
-  function drawPoseCandidate(point) {
+  function drawPoseCandidate(point, label) {
     if (!point || point.x == null || point.y == null) return;
     context.beginPath();
-    if (point.inside_mask) {
-      context.arc(point.x, point.y, 6, 0, Math.PI * 2);
-      context.fillStyle = "#00dc00";
-      context.fill();
-      context.strokeStyle = "#fff";
-      context.lineWidth = 1.5;
-      context.stroke();
-    } else {
-      context.moveTo(point.x - 6, point.y - 6);
-      context.lineTo(point.x + 6, point.y + 6);
-      context.moveTo(point.x + 6, point.y - 6);
-      context.lineTo(point.x - 6, point.y + 6);
-      context.strokeStyle = "#ff0000";
-      context.lineWidth = 2.5;
-      context.stroke();
-    }
+    context.arc(point.x, point.y, 6, 0, Math.PI * 2);
+    context.fillStyle = point.inside_mask ? "#00dc00" : "#ff0000";
+    context.fill();
+    context.strokeStyle = "#fff";
+    context.lineWidth = 1.5;
+    context.stroke();
+    context.font = "bold 13px sans-serif";
+    context.lineWidth = 3;
+    context.strokeStyle = "#172033";
+    context.strokeText(label, point.x + 8, point.y - 8);
+    context.fillStyle = "#fff";
+    context.fillText(label, point.x + 8, point.y - 8);
   }
 
   function renderCanvas() {
@@ -305,22 +301,28 @@
 
     for (const animal of inference.animals || []) {
       if (animal.pose_candidate_left_eye || animal.pose_candidate_right_eye) {
-        drawPoseCandidate(animal.pose_candidate_left_eye);
-        drawPoseCandidate(animal.pose_candidate_right_eye);
+        drawPoseCandidate(animal.pose_candidate_left_eye, "L");
+        drawPoseCandidate(animal.pose_candidate_right_eye, "R");
         continue;
       }
-      for (const [eye, color] of [
-        [animal.left_eye, "#1769d2"],
-        [animal.right_eye, "#e25835"],
+      for (const [eye, color, label] of [
+        [animal.left_eye, "#00dc00", "L"],
+        [animal.right_eye, "#00dc00", "R"],
       ]) {
         if (!eye || eye.x == null || eye.y == null) continue;
         context.beginPath();
-        context.arc(eye.x, eye.y, 5, 0, Math.PI * 2);
+        context.arc(eye.x, eye.y, 6, 0, Math.PI * 2);
         context.fillStyle = color;
         context.fill();
         context.strokeStyle = "#fff";
         context.lineWidth = 1.5;
         context.stroke();
+        context.font = "bold 13px sans-serif";
+        context.lineWidth = 3;
+        context.strokeStyle = "#172033";
+        context.strokeText(label, eye.x + 8, eye.y - 8);
+        context.fillStyle = "#fff";
+        context.fillText(label, eye.x + 8, eye.y - 8);
       }
     }
   }

@@ -620,20 +620,27 @@ class AnimalMetrologyPipeline:
                     continue
                 px, py = round(point["x"]), round(point["y"])
                 point_color = valid_color if point.get("inside_mask") else outside_color
-                if point.get("inside_mask"):
-                    cv2.circle(img, (px, py), 7, point_color, -1, cv2.LINE_AA)
-                else:
-                    cv2.drawMarker(
-                        img, (px, py), point_color, cv2.MARKER_CROSS, 18, 3, cv2.LINE_AA
-                    )
+                cv2.circle(img, (px, py), 8, (255, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(img, (px, py), 6, point_color, -1, cv2.LINE_AA)
+                eye_label = "L" if keypoint_index == 0 else "R"
                 cv2.putText(
                     img,
-                    f"K{keypoint_index + 1} {point.get('conf', 0):.2f}",
+                    eye_label,
                     (px + 9, py - 8),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.48,
+                    0.55,
+                    (0, 0, 0),
+                    3,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    img,
+                    eye_label,
+                    (px + 9, py - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
                     point_color,
-                    2,
+                    1,
                     cv2.LINE_AA,
                 )
 
@@ -871,7 +878,7 @@ class AnimalMetrologyPipeline:
             text_y += row_height
         cv2.putText(
             canvas,
-            "*Pose weights trained on cats/dogs; mask inclusion",
+            "*Cat/dog model; mask location does not verify eyes.",
             (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.34,
@@ -882,7 +889,7 @@ class AnimalMetrologyPipeline:
         text_y += 17
         cv2.putText(
             canvas,
-            "does not confirm eye identity. Red X = outside mask.",
+            "Green dot = inside mask; red dot = outside mask.",
             (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.34,

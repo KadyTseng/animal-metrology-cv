@@ -484,23 +484,20 @@ flowchart LR
 
 ---
 
-## 上傳至 GitHub
+## 📄 授權與第三方素材 (Licenses & Third-Party Assets)
 
-解壓 ZIP 後，在專案資料夾執行以下指令；先檢查 `git status`，確認沒有要排除的本機檔案，再替換成自己的 GitHub repository URL：
+本專案原始碼目前未附 `LICENSE`，因此尚未授予他人依特定開源條款使用、修改或再散布本專案程式碼的權利。公開程式碼前，應先由專案負責人決定並加入適用的程式碼授權。
 
-```bash
-git init -b main
-git add .
-git status
-git commit -m "Initial animal metrology CV project"
-git remote add origin https://github.com/<YOUR-USER>/<YOUR-REPOSITORY>.git
-git push -u origin main
-```
+下列模型、資料或影像不是本專案原創，提供給主管或公開發布前，應逐項確認其原始授權是否允許複製、修改及再散布；僅在 README 標示來源不代表已取得再散布權：
 
-`.gitignore` 會排除 `.env`、照片、訓練資料、權重、推論輸出與 ZIP。此程式專案沒有指定開源授權；公開 repository 前請先決定授權，並確認模型與資料來源的再散布條款。
+| 素材 | 專案中的檔案／來源 | 分享前要確認的事項 |
+| :--- | :--- | :--- |
+| Ultralytics YOLO 權重 | `yolov8n-seg.pt`、`yolov8n-pose.pt` | 確認 Ultralytics 適用的 AGPL-3.0 或 Enterprise 授權條款，以及權重再散布方式。參考 [Ultralytics License](https://www.ultralytics.com/license) 與 [授權原文](https://github.com/ultralytics/ultralytics/blob/main/LICENSE)。 |
+| 本專案微調的 400 張貓狗眼睛模型 | `runs/pose/runs/pose/animalpose_eye_400_fresh/weights/best.pt` | 這是由預訓練權重及 Animal-Pose 訓練資料衍生的 checkpoint；需一併確認模型來源條款及訓練資料授權是否允許分享衍生權重。 |
+| 舊的 100 張模型 | `runs/pose/train/weights/best.pt` | 舊版實驗 checkpoint；非目前建議使用的模型。若要另行分享，同樣須確認其預訓練權重及資料集條款。 |
+| COCO 影像與標註 | 本機 `data/raw/` 中的 COCO 樣本及其來源 | COCO 影像可能各自沿用原始影像的授權；分享前應依 COCO 資料集頁面及個別影像來源確認條款。參考 [COCO Dataset](https://cocodataset.org/)。 |
+| Animal-Pose 訓練影像與標註 | 本機 `data/animalpose_eye_yolo/` | 確認原始 Animal-Pose 資料及各影像的使用、修改與再散布條款；不要只因已下載或已轉成 YOLO 標註格式就假設可再散布。 |
+| 使用者示範照與其標註輸出 | `2ats.jpg`、由該影像產生的標註圖 | 確認照片權利人授權涵蓋複製及交付；量測 CSV 只記錄影像參照與數值，不附照片。 |
+| 環境設定 | `.env` | 不得分享或提交，可能包含 API key 等秘密資訊。分享設定時只提供 `.env.example`，並確認其中只有範例值。 |
 
----
-
-## 📄 授權條款 (License)
-
-本專案程式碼尚未指定開源授權；未附 `LICENSE`，請勿假設可依 MIT 條款再散布。YOLO/Ultralytics 權重、COCO/Animal-Pose 資料及使用者提供的範例照片各自受其來源條款約束。公開發布前請逐項確認授權；原始照片、訓練資料、模型權重、推論輸出與 `.env` 不包含於原始碼 ZIP。
+分享前可先檢查 `.gitignore` 與 `git status`。原始碼 ZIP 預設不包含照片、資料集、模型權重、推論輸出或 `.env`；如需提供素材供主管審查，請先核准相應授權，再使用獨立的審查資料夾傳遞。
